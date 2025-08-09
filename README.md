@@ -15,7 +15,7 @@ A GeoGuessr-inspired Discord bot that challenges users to guess countries based 
 
 - `!stop_g` - Stop the current game (requires manage_messages permission)
 - `!hint` or just `hint` - Get an additional location from the same country (4-second cooldown)
-- `!list` - Display paginated list of all available countries (with navigation arrows)
+- `!list` - Display paginated list of all available countries with letter codes.
 - `!help` - Show all available commands
 
 ### Map Commands
