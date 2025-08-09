@@ -1,0 +1,9 @@
+discord.py
+Flask
+requests
+python-dotenv
+geopandas
+matplotlib
+shapely
+plotly
+kaleido

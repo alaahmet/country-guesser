@@ -1,0 +1,111 @@
+Albania	AL
+Antarctica	AQ
+Argentina	AR
+Australia	AU
+Austria	AT
+Bangladesh	BD
+Belgium	BE
+Bermuda	BM
+Bhutan	BT
+Bolivia	BO
+Botswana	BW
+Brazil	BR
+Bulgaria	BG
+Cambodia	KH
+Canada	CA
+Chile	CL
+Colombia	CO
+Costa Rica	CR
+Croatia	HR
+Czech Republic	CZ
+Denmark	DK
+Dominican Republic	DO
+Ecuador	EC
+Egypt	EG
+Estonia	EE
+Eswatini (Swaziland)	SZ
+Faroe Islands	FO
+Finland	FI
+France	FR
+Germany	DE
+Ghana	GH
+Gibraltar	GI
+Greece	GR
+Greenland	GL
+Guatemala	GT
+Hong Kong	HK
+Hungary	HU
+Iceland	IS
+India	IN
+Indonesia	ID
+Ireland	IE
+Israel	IL
+Italy	IT
+Japan	JP
+Jordan	JO
+Kazakhstan	KZ
+Kenya	KE
+Kyrgyzstan	KG
+Laos	LA
+Latvia	LV
+Lebanon	LB
+Lesotho	LS
+Lithuania	LT
+Luxembourg	LU
+Madagascar	MG
+Malaysia	MY
+Malta	MT
+Mexico	MX
+Monaco	MC
+Mongolia	MN
+Montenegro	ME
+Nepal	NP
+Netherlands	NL
+New Zealand	NZ
+Nigeria	NG
+North Macedonia	MK
+Norway	NO
+Oman	OM
+Pakistan	PK
+Palestine	PS
+Panama	PA
+Peru	PE
+Philippines	PH
+Poland	PL
+Portugal	PT
+Puerto Rico	PR
+Qatar	QA
+Romania	RO
+Russia	RU
+Rwanda	RW
+Senegal	SN
+Serbia	RS
+Singapore	SG
+Slovakia	SK
+Slovenia	SI
+South Africa	ZA
+South Korea	KR
+Spain	ES
+Sri Lanka	LK
+Sweden	SE
+Switzerland	CH
+Taiwan	TW
+Thailand	TH
+Tunisia	TN
+Turkiye	TR
+Türkiye	TR
+Uganda	UG
+Ukraine	UA
+United Arab Emirates	AE
+United Kingdom	GB
+United States	US
+Uruguay	UY
+American Samoa	AS
+Andorra	AD
+China	CN
+Christmas Island	CX
+Curaçao	CW
+Isle of Man	IM
+Northern Mariana Islands	MP
+Réunion	RE
+Liechtenstein	LI
