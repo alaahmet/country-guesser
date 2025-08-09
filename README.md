@@ -5,7 +5,7 @@ A GeoGuessr-inspired Discord bot that challenges users to guess countries based 
 
 ## How to Play
 
-- `!g` - Start a new Street View guessing game (bot selects a random country from 110 countries with Street View coverage). You get 4 Street View images from the same location facing North, East, South, and West. Guess countries by typing 2-letter codes (e.g., `us`, `jp`) or full names (e.g., `united states`, `japan`). Get real-time reactions with country flags (✅ for correct, ❌ for incorrect). Upon correct guess the bot shares the Google Maps link as well.
+- `!g` - Start a new Street View guessing game (bot selects a random country from 110 countries with Street View coverage). You get 4 Street View images from the same location facing North, East, South, and West. Guess countries by typing 2-letter codes (e.g., `us`, `jp`) or full names (e.g., `united states`, `japan`). Get real-time reactions with country flags (✅ for correct, ❌ for incorrect). Receive the Google Maps link upon correct guess.
 
 ![Game Start](screenshots/game-start.png)
 
