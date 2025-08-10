@@ -13,7 +13,7 @@ A GeoGuessr-inspired Discord bot that challenges users to guess countries based 
 ![Correct Guess](screenshots/correct-guess.png)
 
 
-- `!stop_g` - Stop the current game (requires manage_messages permission)
+- `!stop_g` - Stop the current game
 - `!hint` or just `hint` - Get an additional location from the same country (4-second cooldown)
 - `!list` - Display paginated list of all available countries with letter codes.
 - `!help` - Show all available commands
