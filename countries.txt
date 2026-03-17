@@ -109,3 +109,4 @@ Isle of Man	IM
 Northern Mariana Islands	MP
 Réunion	RE
 Liechtenstein	LI
+Vietnam	VN

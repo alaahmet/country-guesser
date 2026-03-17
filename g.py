@@ -118,8 +118,15 @@ class CountryGuesser(commands.Cog, name="CountryGuesser"):
         try:
             self.world_gdf = gpd.read_file(WORLD_GEOJSON_PATH)
             print(f"Loaded world GeoJSON data with {len(self.world_gdf)} countries")
+
+            # Normalize ISO_A2 codes: some Natural Earth rows use ISO_A2='-99'.
+            # Prefer ISO_A2_EH when ISO_A2 is missing/invalid.
+            if 'ISO_A2_EH' in self.world_gdf.columns:
+                invalid_iso = self.world_gdf['ISO_A2'].isna() | (self.world_gdf['ISO_A2'].astype(str) == '-99')
+                self.world_gdf.loc[invalid_iso, 'ISO_A2'] = self.world_gdf.loc[invalid_iso, 'ISO_A2_EH']
+
             # Fix a few known ISO_A2 mismatches in the ne_admin_0_map_units_50m.geojson file
-            corrections = {"Norway": "NO", "Réunion": "RE"}
+            corrections = {"Norway": "NO", "Réunion": "RE", "Portugal": "PT"}
             for name, correct_iso_a2 in corrections.items():
                 mask = self.world_gdf['NAME'] == name
                 if mask.any():
@@ -130,10 +137,24 @@ class CountryGuesser(commands.Cog, name="CountryGuesser"):
                 else:
                     print(f"Warning: '{name}' not found in GeoJSON for ISO_A2 correction.")
 
-
         except Exception as e:
             print(f"Error loading world GeoJSON: {e}")
             print("Map plotting functionality will be unavailable")
+
+    def _normalize_iso2(self, iso2: str | None) -> str | None:
+        if not iso2:
+            return None
+        iso2 = str(iso2).strip().lower()
+        if not iso2 or iso2 in {"-99", "nan", "none"}:
+            return None
+        return iso2
+
+    def _get_entity_iso2(self, row) -> str | None:
+        """Best-effort ISO2 for a Natural Earth row."""
+        iso2 = self._normalize_iso2(row.get('ISO_A2', None))
+        if iso2:
+            return iso2
+        return self._normalize_iso2(row.get('ISO_A2_EH', None))
 
     async def _fetch_url_json(self, url):
         """Fetch JSON from a URL using a thread executor to avoid blocking."""
@@ -441,7 +462,7 @@ class CountryGuesser(commands.Cog, name="CountryGuesser"):
             await ctx.send(embed=direction_embed)
 
 
-    async def _show_continent_map(self, ctx, continent_name_display: str, specific_country_codes: list, plotly_map_scope: str, auto_fit_bounds: bool = False):
+    async def _show_continent_map(self, ctx, continent_name_display: str, specific_country_codes: list):
         """Render a choropleth map for a continent, highlighting incorrect guesses."""
         if self.world_gdf is None:
             await ctx.send("Sorry, the world map data couldn't be loaded. Map visualization is unavailable.")
@@ -451,143 +472,135 @@ class CountryGuesser(commands.Cog, name="CountryGuesser"):
             await ctx.send(f"No country data loaded for {continent_name_display}. Cannot generate map.")
             return
 
-        continent_gdf = self.world_gdf.copy()
-        
-        continent_gdf = continent_gdf[continent_gdf['ISO_A2'].str.lower().isin(specific_country_codes)]
+        # Normalize incoming codes once
+        specific_country_codes = [c.strip().lower() for c in specific_country_codes if c and str(c).strip()]
 
-        if continent_gdf.empty:
-            await ctx.send(f"No map data found for countries listed under {continent_name_display}. "
-                           f"Ensure `continents.json` and GeoJSON data are correct and include these countries.")
-            return
-        
-        def get_country_status(country_code_iso_a2):
-            code_lower = country_code_iso_a2.lower()
-            if code_lower in self.incorrect_guesses:
-                return "Incorrect Guess"
-            else:
-                return "Not Guessed"
-                
-        continent_gdf['status'] = continent_gdf['ISO_A2'].apply(get_country_status)
-        
-        map_title = f"{continent_name_display} Map"
-        
-        fig = px.choropleth(
-            continent_gdf,
-            geojson=continent_gdf.geometry,
-            locations=continent_gdf.index, # Use GeoDataFrame index
-            color='status',
-            color_discrete_map={
-                'Incorrect Guess': '#FF4757', # Modern red
-                'Not Guessed': '#57606F'       # Sophisticated dark gray
-            },
-            scope=plotly_map_scope,
-            labels={'status': 'Country Status'},
-            title=map_title
-        )
-        
-        fig.update_geos(
-            showcoastlines=True,
-            coastlinecolor="#2C3E50",
-            coastlinewidth=1.5,
-            showland=True,
-            landcolor="#ECEFF1",
-            showocean=True,
-            oceancolor="#E3F2FD",
-            showlakes=True,
-            lakecolor="#E1F5FE",
-            showrivers=True,
-            rivercolor="#81D4FA",
-            riverwidth=0.5,
-            showcountries=True,
-            countrycolor="#BDBDBD",
-            countrywidth=0.8,
-            projection_type="natural earth"
-        )
+        try:
+            # Compute ISO2 for each row and filter by that. This fixes cases like Portugal where ISO_A2 may be -99.
+            world = self.world_gdf.copy()
+            world['__iso2'] = world.apply(self._get_entity_iso2, axis=1)
 
-        if auto_fit_bounds and plotly_map_scope == "world":
-            fig.update_geos(fitbounds="locations", visible=True)
-        
-        fig.update_layout(
-            height=900,
-            width=1200,
-            margin={"r":20,"t":80,"l":20,"b":20},
-            title={
-                'text': map_title,
-                'x': 0.5,
-                'xanchor': 'center',
-                'font': {
-                    'size': 24,
-                    'family': 'Arial, sans-serif',
-                    'color': '#2C3E50'
-                }
-            },
-            font=dict(
-                family="Arial, sans-serif",
-                size=14,
-                color="#2C3E50"
-            ),
-            paper_bgcolor="#FAFAFA",
-            plot_bgcolor="#FAFAFA",
-            legend=dict(
-                orientation="h",
-                yanchor="bottom",
-                y=-0.1,
-                xanchor="center",
-                x=0.5,
-                bgcolor="rgba(255,255,255,0.8)",
-                bordercolor="#BDBDBD",
-                borderwidth=1,
-                font=dict(size=12)
+            continent_gdf = world[
+                world['__iso2'].isin(specific_country_codes)
+            ].copy()
+
+            if continent_gdf.empty:
+                await ctx.send(f"No map data found for countries listed under {continent_name_display}. "
+                               f"Ensure `continents.json` and GeoJSON data are correct.")
+                return
+
+            def get_country_status(code):
+                code_n = self._normalize_iso2(code)
+                return "Incorrect Guess" if code_n and code_n in self.incorrect_guesses else "Not Guessed"
+
+            continent_gdf['status'] = continent_gdf['__iso2'].apply(get_country_status)
+
+            map_title = f"{continent_name_display}"
+
+            fig = px.choropleth(
+                continent_gdf,
+                geojson=continent_gdf.geometry,
+                locations=continent_gdf.index,
+                color='status',
+                color_discrete_map={
+                    'Incorrect Guess': '#E74C3C',
+                    'Not Guessed': '#34495E'
+                },
+                hover_name='NAME',
+                hover_data={'status': True},
+                labels={'status': 'Status'},
+                category_orders={'status': ['Not Guessed', 'Incorrect Guess']}
             )
-        )
-        
-        game_status_text = "No active game"
-        if self.current_game:
-            game_status_text = "Game in progress"
-        
-        total_continent_countries = len(specific_country_codes)
-        continent_incorrect_guesses = {code for code in self.incorrect_guesses if code in specific_country_codes}
-        not_guessed_count = total_continent_countries - len(continent_incorrect_guesses)
-        
-        footer_text_status = f"Status: {game_status_text} - {not_guessed_count}/{total_continent_countries} countries in {continent_name_display} not guessed"
-        
-        fig.update_layout(
-            annotations=[
-                dict(
-                    x=0.02,
-                    y=0.02,
-                    xref="paper",
-                    yref="paper",
-                    text=f"<b style='color:#2C3E50;'>{footer_text_status}</b>",
-                    showarrow=False,
-                    font=dict(
-                        size=16,
-                        family="Arial, sans-serif",
-                        color="#2C3E50"
-                    ),
-                    bgcolor="rgba(255,255,255,0.9)",
-                    bordercolor="#BDBDBD",
+
+            fig.update_geos(
+                fitbounds="locations",
+                visible=True,
+                showcoastlines=True,
+                coastlinecolor="#2C3E50",
+                coastlinewidth=1,
+                showland=True,
+                landcolor="#F4F6F7",
+                showocean=True,
+                oceancolor="#D4E6F1",
+                showlakes=True,
+                lakecolor="#AED6F1",
+                showrivers=False,
+                showcountries=True,
+                countrycolor="#D5D8DC",
+                countrywidth=0.5,
+                projection_type="natural earth",
+                bgcolor="rgba(0,0,0,0)"
+            )
+
+            fig.update_traces(
+                marker_line_color='#ECF0F1',
+                marker_line_width=1.5
+            )
+
+            # Stats
+            total = len(specific_country_codes)
+            incorrect_in_continent = {c for c in self.incorrect_guesses if c in specific_country_codes}
+            remaining = total - len(incorrect_in_continent)
+            game_status = "Game in progress" if self.current_game else "No active game"
+            footer_text = f"{game_status}  \u2022  {remaining}/{total} countries remaining in {continent_name_display}"
+
+            fig.update_layout(
+                height=900,
+                width=1400,
+                margin=dict(r=10, t=70, l=10, b=70),
+                title=dict(
+                    text=f"<b>\U0001f5fa {map_title}</b>",
+                    x=0.5,
+                    xanchor='center',
+                    font=dict(size=28, family='Segoe UI, Arial, sans-serif', color='#2C3E50')
+                ),
+                font=dict(family='Segoe UI, Arial, sans-serif', size=13, color='#2C3E50'),
+                paper_bgcolor='#FAFBFC',
+                plot_bgcolor='rgba(0,0,0,0)',
+                legend=dict(
+                    title=dict(text='<b>Legend</b>', font=dict(size=14)),
+                    orientation='h',
+                    yanchor='top',
+                    y=-0.03,
+                    xanchor='center',
+                    x=0.5,
+                    bgcolor='rgba(255,255,255,0.9)',
+                    bordercolor='#D5D8DC',
                     borderwidth=1,
-                    borderpad=8
-                )
-            ]
-        )
-        
-        img_bytes = io.BytesIO()
-        pio.write_image(fig, img_bytes, format="png", width=1200, height=900, scale=2)
-        img_bytes.seek(0)
-        
-        discord_file = discord.File(img_bytes, filename=f"{continent_name_display.lower().replace(' ', '_')}_map.png")
-        
-        embed = discord.Embed(
-            title=f"🗺️ {map_title}",
-            description="🔴 Incorrect guesses • ⚫ Not yet guessed\n*Map of your guessing progress*",
-            color=0x3498DB  # Modern blue color
-        )
-        embed.set_image(url=f"attachment://{discord_file.filename}")
-        embed.set_footer(text=f"🎯 {footer_text_status}")
-        
-        await ctx.send(file=discord_file, embed=embed)
+                    font=dict(size=13),
+                    itemsizing='constant'
+                ),
+                annotations=[
+                    dict(
+                        x=0.5, y=-0.08,
+                        xref='paper', yref='paper',
+                        text=f"<i>{footer_text}</i>",
+                        showarrow=False,
+                        font=dict(size=13, color='#7F8C8D', family='Segoe UI, Arial, sans-serif'),
+                    )
+                ]
+            )
+
+            img_bytes = io.BytesIO()
+            pio.write_image(fig, img_bytes, format='png', width=1400, height=900, scale=2)
+            img_bytes.seek(0)
+
+            filename = f"{continent_name_display.lower().replace(' ', '_')}_map.png"
+            discord_file = discord.File(img_bytes, filename=filename)
+
+            embed = discord.Embed(
+                title=f"\U0001f5fa\ufe0f {map_title} Map",
+                description="\U0001f534 Incorrect guesses  \u2022  \u26ab Not yet guessed",
+                color=0x2C3E50
+            )
+            embed.set_image(url=f"attachment://{filename}")
+            embed.set_footer(text=f"\U0001f3af {footer_text}")
+
+            await ctx.send(file=discord_file, embed=embed)
+
+        except Exception as e:
+            print(f"Error generating {continent_name_display} map: {e}")
+            await ctx.send(f"An error occurred while generating the {continent_name_display} map. Please try again later.")
 
 
     async def _send_hint_impl(self, channel: discord.TextChannel):
@@ -633,30 +646,42 @@ class CountryGuesser(commands.Cog, name="CountryGuesser"):
     @commands.command(name="eu", help="Displays a Europe map highlighting incorrect guesses.")
     async def show_europe_map(self, ctx):
         """Map of Europe with incorrect guesses highlighted."""
-        await self._show_continent_map(ctx, "Europe", eu_countries, "europe")
+        await self._show_continent_map(ctx, "Europe", eu_countries)
 
     @commands.command(name="as", help="Displays an Asia map highlighting incorrect guesses.")
     async def show_asia_map(self, ctx):
         """Map of Asia with incorrect guesses highlighted."""
-        await self._show_continent_map(ctx, "Asia", as_countries, "asia")
+        await self._show_continent_map(ctx, "Asia", as_countries)
 
     @commands.command(name="af", help="Displays an Africa map highlighting incorrect guesses.")
     async def show_africa_map(self, ctx):
         """Map of Africa with incorrect guesses highlighted."""
-        await self._show_continent_map(ctx, "Africa", af_countries, "africa")
+        await self._show_continent_map(ctx, "Africa", af_countries)
 
     @commands.command(name="am", help="Displays an Americas map highlighting incorrect guesses.")
     async def show_americas_map(self, ctx):
         """Map of the Americas with incorrect guesses highlighted."""
-        await self._show_continent_map(ctx, "The Americas", am_countries, "world", auto_fit_bounds=True)
+        await self._show_continent_map(ctx, "The Americas", am_countries)
 
+    @commands.command(name="world", help="Displays a world map highlighting incorrect guesses.")
+    async def show_world_map(self, ctx):
+        """Map of the whole world with incorrect guesses highlighted."""
+        if self.world_gdf is None:
+            await ctx.send("Sorry, the world map data couldn't be loaded. Map visualization is unavailable.")
+            return
+
+        # Best-effort: show only the playable list (countries.txt) if available; otherwise show everything.
+        playable_codes = sorted(set(COUNTRY_CODE_TO_NAME.keys()))
+        if playable_codes:
+            await self._show_continent_map(ctx, "World", playable_codes)
+        else:
+            # Fallback to every iso2 in the geojson
+            world = self.world_gdf.copy()
+            world['__iso2'] = world.apply(self._get_entity_iso2, axis=1)
+            all_codes = sorted({c for c in world['__iso2'].tolist() if c})
+            await self._show_continent_map(ctx, "World", all_codes)
 
 async def setup(bot):
-    if not GOOGLE_MAPS_API_KEY:
-        print("CRITICAL: GOOGLE_MAPS_API_KEY environment variable is not set. CountryGuesser cog will not be loaded.")
-        print("Please set the GOOGLE_MAPS_API_KEY environment variable with your Google Maps API key.")
-        return  # Exit early if the API key is not set
-
+    """Entrypoint used by main.py to register this cog."""
     load_country_data()
     await bot.add_cog(CountryGuesser(bot))
-    print("CountryGuesser cog loaded.")
