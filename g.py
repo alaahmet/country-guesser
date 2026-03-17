@@ -10,6 +10,7 @@ import plotly.io as pio
 import geopandas as gpd
 import io
 import json
+from typing import Optional
 
 
 load_dotenv()
@@ -141,7 +142,7 @@ class CountryGuesser(commands.Cog, name="CountryGuesser"):
             print(f"Error loading world GeoJSON: {e}")
             print("Map plotting functionality will be unavailable")
 
-    def _normalize_iso2(self, iso2: str | None) -> str | None:
+    def _normalize_iso2(self, iso2: Optional[str]) -> Optional[str]:
         if not iso2:
             return None
         iso2 = str(iso2).strip().lower()
@@ -149,7 +150,7 @@ class CountryGuesser(commands.Cog, name="CountryGuesser"):
             return None
         return iso2
 
-    def _get_entity_iso2(self, row) -> str | None:
+    def _get_entity_iso2(self, row) -> Optional[str]:
         """Best-effort ISO2 for a Natural Earth row."""
         iso2 = self._normalize_iso2(row.get('ISO_A2', None))
         if iso2:
