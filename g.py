@@ -11,6 +11,7 @@ import geopandas as gpd
 import io
 import json
 from typing import Optional
+import time
 
 
 load_dotenv()
@@ -103,18 +104,31 @@ class CountryGuesser(commands.Cog, name="CountryGuesser"):
         self.bot = bot
         self.current_game = None
         self.max_retries_location = 30
-        
+
         self.incorrect_guesses = set()
         self._hint_cooldowns = {}
         self.hint_cooldown_seconds = 4
-        
+
+        # Rate limit for map commands (per channel)
+        self._map_cooldowns = {}
+        self.map_cooldown_seconds = int(os.getenv("MAP_COOLDOWN_SECONDS", "10"))
+
+        # Cache for rendered continent maps to avoid re-rendering on every command
+        # Key: (continent_key, incorrect_guesses_fingerprint)
+        self._map_image_cache = {}
+        self._map_cache_max_entries = 24
+        self._map_geometry_simplify_tolerance = float(os.getenv("MAP_SIMPLIFY_TOL", "0.05"))
+
+        # Precomputed continent GeoDataFrames (already filtered and simplified)
+        self._continent_gdfs = {}
+
         self.view_directions = [
             {"heading": 0, "name": "North"},
             {"heading": 90, "name": "East"},
             {"heading": 180, "name": "South"},
             {"heading": 270, "name": "West"}
         ]
-        
+
         self.world_gdf = None
         try:
             self.world_gdf = gpd.read_file(WORLD_GEOJSON_PATH)
@@ -137,6 +151,9 @@ class CountryGuesser(commands.Cog, name="CountryGuesser"):
                         print(f"Corrected ISO_A2 for {name} from '{current_iso_a2}' to '{correct_iso_a2}'.")
                 else:
                     print(f"Warning: '{name}' not found in GeoJSON for ISO_A2 correction.")
+
+            # Precompute ISO2 once and build continent subsets. This avoids costly apply/filter every command.
+            self._prepare_map_data()
 
         except Exception as e:
             print(f"Error loading world GeoJSON: {e}")
@@ -463,8 +480,79 @@ class CountryGuesser(commands.Cog, name="CountryGuesser"):
             await ctx.send(embed=direction_embed)
 
 
+    def _prepare_map_data(self):
+        """Precompute ISO2 column + continent subsets (filtered + simplified) for faster rendering."""
+        if self.world_gdf is None:
+            return
+
+        world = self.world_gdf.copy()
+        # Compute once and store
+        world['__iso2'] = world.apply(self._get_entity_iso2, axis=1)
+        world = world[world['__iso2'].notna()].copy()
+
+        # Simplify geometry to reduce render cost; preserve_topology prevents self-intersections.
+        try:
+            tol = self._map_geometry_simplify_tolerance
+            if tol and tol > 0:
+                world['geometry'] = world['geometry'].simplify(tolerance=tol, preserve_topology=True)
+                print(f"Simplified world geometries with tolerance={tol}")
+        except Exception as e:
+            print(f"Warning: geometry simplification failed: {e}")
+
+        def subset_for_codes(codes):
+            codes_n = [c.strip().lower() for c in (codes or []) if c and str(c).strip()]
+            gdf = world[world['__iso2'].isin(codes_n)].copy()
+            # Normalize to a stable index so plotly is happy
+            gdf.reset_index(drop=True, inplace=True)
+            return gdf
+
+        # Build and store continent gdfs
+        self._continent_gdfs = {
+            'eu': subset_for_codes(eu_countries),
+            'as': subset_for_codes(as_countries),
+            'af': subset_for_codes(af_countries),
+            'am': subset_for_codes(am_countries),
+        }
+
+        # World map uses playable codes if available; otherwise everything
+        playable_codes = sorted(set(COUNTRY_CODE_TO_NAME.keys()))
+        self._continent_gdfs['world'] = subset_for_codes(playable_codes) if playable_codes else world.reset_index(drop=True)
+
+        # Some may be empty depending on configuration
+        for k, gdf in self._continent_gdfs.items():
+            print(f"Prepared map subset '{k}' with {len(gdf)} features")
+
+    def _incorrect_fingerprint(self, specific_country_codes: list) -> str:
+        """Stable fingerprint for cache invalidation. Only consider guesses relevant to the subset."""
+        codes_n = {self._normalize_iso2(c) for c in (specific_country_codes or [])}
+        codes_n.discard(None)
+        relevant = sorted({c for c in self.incorrect_guesses if c in codes_n})
+        return ",".join(relevant)
+
+    def _cache_put(self, key, value):
+        self._map_image_cache[key] = value
+        # Simple eviction: remove oldest when over capacity
+        if len(self._map_image_cache) > self._map_cache_max_entries:
+            try:
+                oldest_key = min(self._map_image_cache.items(), key=lambda kv: kv[1].get('ts', 0))[0]
+                self._map_image_cache.pop(oldest_key, None)
+            except Exception:
+                # fallback: arbitrary pop
+                self._map_image_cache.pop(next(iter(self._map_image_cache)))
+
     async def _show_continent_map(self, ctx, continent_name_display: str, specific_country_codes: list):
         """Render a choropleth map for a continent, highlighting incorrect guesses."""
+        # Map rate limit (per channel)
+        now = discord.utils.utcnow()
+        last_used = self._map_cooldowns.get(ctx.channel.id)
+        if last_used is not None:
+            elapsed = (now - last_used).total_seconds()
+            remaining_cd = self.map_cooldown_seconds - elapsed
+            if remaining_cd > 0:
+                await ctx.send(f"Map is on cooldown. Try again in {int(remaining_cd)}s.", delete_after=5)
+                return
+        self._map_cooldowns[ctx.channel.id] = now
+
         if self.world_gdf is None:
             await ctx.send("Sorry, the world map data couldn't be loaded. Map visualization is unavailable.")
             return
@@ -476,18 +564,58 @@ class CountryGuesser(commands.Cog, name="CountryGuesser"):
         # Normalize incoming codes once
         specific_country_codes = [c.strip().lower() for c in specific_country_codes if c and str(c).strip()]
 
-        try:
-            # Compute ISO2 for each row and filter by that. This fixes cases like Portugal where ISO_A2 may be -99.
-            world = self.world_gdf.copy()
-            world['__iso2'] = world.apply(self._get_entity_iso2, axis=1)
+        # Cache lookup: if incorrect guesses haven't changed for this subset, reuse last rendered bytes
+        fp = self._incorrect_fingerprint(specific_country_codes)
+        cache_key = (continent_name_display.lower(), fp)
+        cached = self._map_image_cache.get(cache_key)
+        if cached and cached.get('png'):
+            img_bytes = io.BytesIO(cached['png'])
+            filename = cached.get('filename', f"{continent_name_display.lower().replace(' ', '_')}_map.png")
+            footer_text = cached.get('footer_text', '')
 
-            continent_gdf = world[
-                world['__iso2'].isin(specific_country_codes)
-            ].copy()
+            discord_file = discord.File(img_bytes, filename=filename)
+            embed = discord.Embed(
+                title=f"\U0001f5fa\ufe0f {continent_name_display} Map",
+                description="\U0001f534 Incorrect guesses  \u2022  \u26ab Not yet guessed",
+                color=0x2C3E50
+            )
+            embed.set_image(url=f"attachment://{filename}")
+            if footer_text:
+                embed.set_footer(text=f"\U0001f3af {footer_text}")
+
+            await ctx.send(file=discord_file, embed=embed)
+            return
+
+        try:
+            # Use precomputed/simplified subset if possible
+            key = None
+            name_l = continent_name_display.strip().lower()
+            if name_l == 'europe':
+                key = 'eu'
+            elif name_l == 'asia':
+                key = 'as'
+            elif name_l == 'africa':
+                key = 'af'
+            elif name_l in {'the americas', 'americas', 'america'}:
+                key = 'am'
+            elif name_l == 'world':
+                key = 'world'
+
+            if key and key in self._continent_gdfs and not self._continent_gdfs[key].empty:
+                continent_gdf = self._continent_gdfs[key].copy()
+            else:
+                # Fallback: filter from precomputed world iso2 column
+                world = self.world_gdf.copy()
+                if '__iso2' not in world.columns:
+                    world['__iso2'] = world.apply(self._get_entity_iso2, axis=1)
+                continent_gdf = world[world['__iso2'].isin(specific_country_codes)].copy()
+                continent_gdf.reset_index(drop=True, inplace=True)
 
             if continent_gdf.empty:
-                await ctx.send(f"No map data found for countries listed under {continent_name_display}. "
-                               f"Ensure `continents.json` and GeoJSON data are correct.")
+                await ctx.send(
+                    f"No map data found for countries listed under {continent_name_display}. "
+                    f"Ensure `continents.json` and GeoJSON data are correct."
+                )
                 return
 
             def get_country_status(code):
@@ -535,31 +663,30 @@ class CountryGuesser(commands.Cog, name="CountryGuesser"):
 
             fig.update_traces(
                 marker_line_color='#ECF0F1',
-                marker_line_width=1.5
+                marker_line_width=1.2
             )
 
             # Stats
             total = len(specific_country_codes)
             incorrect_in_continent = {c for c in self.incorrect_guesses if c in specific_country_codes}
             remaining = total - len(incorrect_in_continent)
-            game_status = "Game in progress" if self.current_game else "No active game"
-            footer_text = f"{game_status}  \u2022  {remaining}/{total} countries remaining in {continent_name_display}"
+            footer_text = f"{remaining}/{total} countries remaining in {continent_name_display}"
 
             fig.update_layout(
-                height=900,
-                width=1400,
+                height=700,
+                width=1100,
                 margin=dict(r=10, t=70, l=10, b=70),
                 title=dict(
                     text=f"<b>\U0001f5fa {map_title}</b>",
                     x=0.5,
                     xanchor='center',
-                    font=dict(size=28, family='Segoe UI, Arial, sans-serif', color='#2C3E50')
+                    font=dict(size=24, family='Segoe UI, Arial, sans-serif', color='#2C3E50')
                 ),
-                font=dict(family='Segoe UI, Arial, sans-serif', size=13, color='#2C3E50'),
+                font=dict(family='Segoe UI, Arial, sans-serif', size=12, color='#2C3E50'),
                 paper_bgcolor='#FAFBFC',
                 plot_bgcolor='rgba(0,0,0,0)',
                 legend=dict(
-                    title=dict(text='<b>Legend</b>', font=dict(size=14)),
+                    title=dict(text='<b>Legend</b>', font=dict(size=13)),
                     orientation='h',
                     yanchor='top',
                     y=-0.03,
@@ -568,7 +695,7 @@ class CountryGuesser(commands.Cog, name="CountryGuesser"):
                     bgcolor='rgba(255,255,255,0.9)',
                     bordercolor='#D5D8DC',
                     borderwidth=1,
-                    font=dict(size=13),
+                    font=dict(size=12),
                     itemsizing='constant'
                 ),
                 annotations=[
@@ -577,13 +704,14 @@ class CountryGuesser(commands.Cog, name="CountryGuesser"):
                         xref='paper', yref='paper',
                         text=f"<i>{footer_text}</i>",
                         showarrow=False,
-                        font=dict(size=13, color='#7F8C8D', family='Segoe UI, Arial, sans-serif'),
+                        font=dict(size=12, color='#7F8C8D', family='Segoe UI, Arial, sans-serif'),
                     )
                 ]
             )
 
+            # Export a smaller image with lower scale to reduce CPU/RAM.
             img_bytes = io.BytesIO()
-            pio.write_image(fig, img_bytes, format='png', width=1400, height=900, scale=2)
+            pio.write_image(fig, img_bytes, format='png', width=1100, height=700, scale=1)
             img_bytes.seek(0)
 
             filename = f"{continent_name_display.lower().replace(' ', '_')}_map.png"
@@ -599,10 +727,23 @@ class CountryGuesser(commands.Cog, name="CountryGuesser"):
 
             await ctx.send(file=discord_file, embed=embed)
 
+            # Save rendered PNG to cache (store bytes to reduce memory fragmentation)
+            try:
+                self._cache_put(
+                    cache_key,
+                    {
+                        'png': img_bytes.getvalue(),
+                        'filename': filename,
+                        'footer_text': footer_text,
+                        'ts': time.time(),
+                    }
+                )
+            except Exception:
+                pass
+
         except Exception as e:
             print(f"Error generating {continent_name_display} map: {e}")
             await ctx.send(f"An error occurred while generating the {continent_name_display} map. Please try again later.")
-
 
     async def _send_hint_impl(self, channel: discord.TextChannel):
         # Cooldown per channel for plain 'hint' and command reuse
