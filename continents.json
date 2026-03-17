@@ -42,8 +42,7 @@
         "tr",
         "ua",
         "gb",
-        "gi",
-        "im"
+        "gi"
     ],
     "Asia": [
         "bd",
@@ -76,9 +75,7 @@
         "vn",
         "ae",
         "au",
-        "nz",
-        "cx",
-        "mp"
+        "nz"
     ],
     "Africa": [
         "bw",
@@ -94,18 +91,15 @@
         "za",
         "tn",
         "ug",
-        "re",
         "aq"
     ],
     "America": [
         "ca",
         "mx",
         "us",
-        "bm",
         "do",
         "pr",
         "cr",
-        "cw",
         "gt",
         "ar",
         "bo",
@@ -115,7 +109,6 @@
         "ec",
         "pe",
         "uy",
-        "pa",
-        "as"
+        "pa"
     ]
 }

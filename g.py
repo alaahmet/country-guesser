@@ -571,7 +571,6 @@ class CountryGuesser(commands.Cog, name="CountryGuesser"):
         if cached and cached.get('png'):
             img_bytes = io.BytesIO(cached['png'])
             filename = cached.get('filename', f"{continent_name_display.lower().replace(' ', '_')}_map.png")
-            footer_text = cached.get('footer_text', '')
 
             discord_file = discord.File(img_bytes, filename=filename)
             embed = discord.Embed(
@@ -580,8 +579,6 @@ class CountryGuesser(commands.Cog, name="CountryGuesser"):
                 color=0x2C3E50
             )
             embed.set_image(url=f"attachment://{filename}")
-            if footer_text:
-                embed.set_footer(text=f"\U0001f3af {footer_text}")
 
             await ctx.send(file=discord_file, embed=embed)
             return
@@ -666,16 +663,10 @@ class CountryGuesser(commands.Cog, name="CountryGuesser"):
                 marker_line_width=1.2
             )
 
-            # Stats
-            total = len(specific_country_codes)
-            incorrect_in_continent = {c for c in self.incorrect_guesses if c in specific_country_codes}
-            remaining = total - len(incorrect_in_continent)
-            footer_text = f"{remaining}/{total} countries remaining in {continent_name_display}"
-
             fig.update_layout(
                 height=700,
                 width=1100,
-                margin=dict(r=10, t=70, l=10, b=70),
+                margin=dict(r=10, t=70, l=10, b=30),
                 title=dict(
                     text=f"<b>\U0001f5fa {map_title}</b>",
                     x=0.5,
@@ -697,16 +688,7 @@ class CountryGuesser(commands.Cog, name="CountryGuesser"):
                     borderwidth=1,
                     font=dict(size=12),
                     itemsizing='constant'
-                ),
-                annotations=[
-                    dict(
-                        x=0.5, y=-0.08,
-                        xref='paper', yref='paper',
-                        text=f"<i>{footer_text}</i>",
-                        showarrow=False,
-                        font=dict(size=12, color='#7F8C8D', family='Segoe UI, Arial, sans-serif'),
-                    )
-                ]
+                )
             )
 
             # Export a smaller image with lower scale to reduce CPU/RAM.
@@ -723,7 +705,6 @@ class CountryGuesser(commands.Cog, name="CountryGuesser"):
                 color=0x2C3E50
             )
             embed.set_image(url=f"attachment://{filename}")
-            embed.set_footer(text=f"\U0001f3af {footer_text}")
 
             await ctx.send(file=discord_file, embed=embed)
 
@@ -734,7 +715,6 @@ class CountryGuesser(commands.Cog, name="CountryGuesser"):
                     {
                         'png': img_bytes.getvalue(),
                         'filename': filename,
-                        'footer_text': footer_text,
                         'ts': time.time(),
                     }
                 )

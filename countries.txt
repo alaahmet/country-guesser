@@ -5,7 +5,6 @@ Australia	AU
 Austria	AT
 Bangladesh	BD
 Belgium	BE
-Bermuda	BM
 Bhutan	BT
 Bolivia	BO
 Botswana	BW
@@ -100,13 +99,7 @@ United Arab Emirates	AE
 United Kingdom	GB
 United States	US
 Uruguay	UY
-American Samoa	AS
 Andorra	AD
 China	CN
-Christmas Island	CX
-Curaçao	CW
-Isle of Man	IM
-Northern Mariana Islands	MP
-Réunion	RE
 Liechtenstein	LI
 Vietnam	VN
